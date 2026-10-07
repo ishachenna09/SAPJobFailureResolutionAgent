@@ -1,0 +1,36 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Testing & Cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local SQLite DB
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+sap_jobs.db
+
+# Secrets & Environment
+.env
+.env.*
+*.env
+!.env.example
+
+# Scratch scripts
+scratch/
+
+# Logs
+*.log
+logs/
