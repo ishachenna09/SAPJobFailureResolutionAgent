@@ -151,7 +151,7 @@ def list_job_runs(
             continue
 
         analysis = db.query(FailureAnalysisModel).filter_by(job_run_id=r.id).first()
-        rem = db.query(RemediationExecutionModel).filter_by(job_run_id=r.id).first()
+        rem = db.query(RemediationExecutionModel).filter_by(job_run_id=r.id).order_by(RemediationExecutionModel.id.desc()).first()
 
         result.append({
             "id": r.id,
@@ -319,7 +319,11 @@ def get_job_history(job_name: str, run_count: int, db: Session = Depends(get_db)
 async def _run_remediation_background(job_name: str, run_count: int, execution_id: str):
     db = SessionLocal()
     try:
-        service = RemediationService(db)
+        from app.sap import get_sap_job_service
+        run = db.query(JobRunModel).filter_by(job_name=job_name, run_count=run_count).first()
+        platform_val = getattr(run, "platform", "MOCK_SAP") if run else "MOCK_SAP"
+        sap_service = get_sap_job_service(platform=platform_val)
+        service = RemediationService(db, sap_service=sap_service)
         await service.execute_remediation(job_name, run_count, execution_id=execution_id)
     except Exception as e:
         print(f"Background remediation error for {job_name} #{run_count}: {e}")
@@ -343,18 +347,22 @@ async def trigger_job_remediation(
 
     # Check if job run is already resolved
     existing_success_child = db.query(JobRunModel).filter_by(parent_run_id=run.id, status="SUCCESS").first()
-    existing_rem = db.query(RemediationExecutionModel).filter_by(job_run_id=run.id).first()
+    has_resolved_rem = db.query(RemediationExecutionModel).filter(
+        RemediationExecutionModel.job_run_id == run.id,
+        RemediationExecutionModel.status.in_(["AUTO_RESOLVED", "MANUALLY_RESOLVED"])
+    ).first()
 
-    if run.status == "SUCCESS" or existing_success_child or (existing_rem and existing_rem.status in ["AUTO_RESOLVED", "MANUALLY_RESOLVED"]):
+    if run.status == "SUCCESS" or existing_success_child or has_resolved_rem:
         raise HTTPException(
             status_code=400,
             detail=f"Job run {job_name} #{run_count} has already been successfully resolved via agent."
         )
 
-    if existing_rem and existing_rem.status == "IN_PROGRESS":
+    in_progress_rem = db.query(RemediationExecutionModel).filter_by(job_run_id=run.id, status="IN_PROGRESS").order_by(RemediationExecutionModel.id.desc()).first()
+    if in_progress_rem:
         return {
-            "execution_id": existing_rem.execution_id,
-            "status": existing_rem.status,
+            "execution_id": in_progress_rem.execution_id,
+            "status": in_progress_rem.status,
             "message": "Remediation already running for this job execution.",
             "job_name": job_name,
             "run_count": run_count

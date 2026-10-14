@@ -9,14 +9,19 @@ class MockSAPJobService(SAPJobService):
     Local Mock SAP Application Job Runtime conforming to SAP_COM_0326 semantics.
     Supports JobStatusGet, JobinfoGet, JobHeaderSet/Logs, JobParamValuesGet, JobRestart.
     """
+    _shared_jobs_db: Dict[str, Dict[str, Any]] = {}
+
     def __init__(self):
-        self._seed_mock_data()
+        if not MockSAPJobService._shared_jobs_db:
+            self._seed_mock_data()
+        self.jobs_db = MockSAPJobService._shared_jobs_db
 
     def _seed_mock_data(self):
         now = datetime.now(timezone.utc)
         today_str = now.strftime("%Y-%m-%d")
 
-        self.jobs_db: Dict[str, Dict[str, Any]] = {
+        MockSAPJobService._shared_jobs_db = {
+
             # Failed Job 1 (Can be run through agent - DB Lock retryable)
             "Z_CUSTOMER_LOAD:1001": {
                 "id": 1,
@@ -262,6 +267,31 @@ class MockSAPJobService(SAPJobService):
                     ],
                     "parameters": [{"param_name": "JOB_MODE", "param_value": "SIMULATED"}]
                 }
+            elif scenario == "RFC_TIMEOUT":
+                self.jobs_db[key] = {
+                    "id": random.randint(1000, 9999),
+                    "job_name": job_name,
+                    "run_count": run_count,
+                    "status": "FAILED",
+                    "job_text": f"Simulated {job_name} RFC Network Timeout",
+                    "job_user": "SAP_RFC_USER",
+                    "environment": "MOCK_SAP_S4HANA",
+                    "restart_allowed": True,
+                    "max_retries": 2,
+                    "retry_count": 0,
+                    "return_code": 6,
+                    "failed_step_number": 2,
+                    "start_time": datetime.now(timezone.utc).isoformat(),
+                    "steps": [
+                        {"step_number": 1, "step_name": "Extract Vendor Delta", "program_name": "R_VEND_EXT", "status": "SUCCESS", "return_code": 0, "start_time": now_str, "end_time": now_str},
+                        {"step_number": 2, "step_name": "Transmit via RFC Gateway", "program_name": "R_RFC_SEND", "status": "FAILED", "return_code": 6, "start_time": now_str, "end_time": now_str}
+                    ],
+                    "logs": [
+                        {"timestamp": now_str, "severity": "INFO", "step_number": 1, "message": "Step 1 complete. 850 vendor records extracted.", "is_error_highlight": False},
+                        {"timestamp": now_str, "severity": "ERROR", "step_number": 2, "message": "ERROR: RFC_TIMEOUT - Gateway connection lost after 15000ms", "is_error_highlight": True}
+                    ],
+                    "parameters": [{"param_name": "RFC_DESTINATION", "param_value": "SAP_GW_PROD"}]
+                }
             else:
                 self.jobs_db[key] = {
                     "id": random.randint(1000, 9999),
@@ -289,10 +319,73 @@ class MockSAPJobService(SAPJobService):
                     "parameters": [{"param_name": "JOB_MODE", "param_value": "SIMULATED"}]
                 }
 
+    def _restore_from_db_or_register(self, job_name: str, run_count: int):
+        key = self._get_key(job_name, run_count)
+        if key in self.jobs_db:
+            return
+        try:
+            from app.db.database import SessionLocal
+            from app.db.models import JobRunModel
+            db = SessionLocal()
+            try:
+                run_model = db.query(JobRunModel).filter_by(job_name=job_name, run_count=run_count).first()
+                if run_model and run_model.steps and run_model.logs:
+                    steps = [
+                        {
+                            "step_number": s.step_number,
+                            "step_name": s.step_name,
+                            "program_name": s.program_name,
+                            "status": s.status,
+                            "return_code": s.return_code,
+                            "start_time": None,
+                            "end_time": None
+                        }
+                        for s in sorted(run_model.steps, key=lambda x: x.step_number)
+                    ]
+                    logs = [
+                        {
+                            "timestamp": l.timestamp.strftime("%H:%M:%S") if getattr(l, "timestamp", None) and hasattr(l.timestamp, "strftime") else "10:00:00",
+                            "severity": l.severity,
+                            "step_number": l.step_number,
+                            "message": l.message,
+                            "is_error_highlight": l.is_error_highlight
+                        }
+                        for l in run_model.logs
+                    ]
+                    params = [
+                        {"param_name": p.param_name, "param_value": p.param_value}
+                        for p in run_model.parameters
+                    ]
+                    self.jobs_db[key] = {
+                        "id": run_model.id,
+                        "job_name": run_model.job_name,
+                        "run_count": run_model.run_count,
+                        "status": run_model.status,
+                        "job_text": run_model.job_text,
+                        "job_user": run_model.job_user or "SAP_BATCH_USER",
+                        "environment": "MOCK_SAP_S4HANA",
+                        "restart_allowed": True if run_model.return_code != 12 else False,
+                        "max_retries": 2 if run_model.return_code != 12 else 0,
+                        "retry_count": run_model.retry_count,
+                        "return_code": run_model.return_code,
+                        "failed_step_number": run_model.failed_step_number,
+                        "start_time": run_model.start_time.isoformat() if hasattr(run_model.start_time, "isoformat") else str(run_model.start_time or ""),
+                        "steps": steps,
+                        "logs": logs,
+                        "parameters": params
+                    }
+                    return
+            finally:
+                db.close()
+        except Exception:
+            pass
+
+        self.ensure_job_registered(job_name, run_count)
+
     async def get_job_status(self, job_name: str, run_count: int) -> Dict[str, Any]:
         key = self._get_key(job_name, run_count)
         if key not in self.jobs_db:
-            self.ensure_job_registered(job_name, run_count)
+            self._restore_from_db_or_register(job_name, run_count)
         job = self.jobs_db[key]
         return {
             "job_name": job["job_name"],
@@ -306,7 +399,7 @@ class MockSAPJobService(SAPJobService):
     async def get_job_info(self, job_name: str, run_count: int) -> JobRunDetailSchema:
         key = self._get_key(job_name, run_count)
         if key not in self.jobs_db:
-            self.ensure_job_registered(job_name, run_count)
+            self._restore_from_db_or_register(job_name, run_count)
         job = self.jobs_db[key]
 
         steps = [JobStepSchema(**s) for s in job["steps"]]

@@ -118,7 +118,7 @@ class GeminiAIService(AIService):
     """
     Real Google Gemini LLM analyzer using REST API via httpx.
     """
-    def __init__(self, api_key: str, model: str = "gemini-3.6-flash"):
+    def __init__(self, api_key: str, model: str = "gemini-1.5-flash"):
         self.api_key = api_key
         self.model = model
         self.fallback = RuleBasedAIService()
@@ -225,17 +225,21 @@ Steps: {json.dumps([s.model_dump() for s in job_details.steps])}"""
 def get_ai_service() -> AIService:
     """
     Selects the AI provider based on environment variables / settings:
-    - GEMINI_API_KEY -> GeminiAIService
-    - GROQ_API_KEY -> GroqAIService
-    - Defaults to RuleBasedAIService (zero-dependency, fast, offline)
+    - AI_PROVIDER="FALLBACK" -> RuleBasedAIService (zero-dependency, fast, deterministic)
+    - AI_PROVIDER="GROQ" -> GroqAIService
+    - AI_PROVIDER="GEMINI" -> GeminiAIService
+    - Defaults to Groq if key configured, otherwise RuleBasedAIService
     """
-    if settings.AI_PROVIDER == "GEMINI" and settings.GEMINI_API_KEY:
-        return GeminiAIService(settings.GEMINI_API_KEY)
-    elif settings.AI_PROVIDER == "GROQ" and settings.GROQ_API_KEY:
+    provider = (settings.AI_PROVIDER or "").upper()
+    if provider in ("FALLBACK", "RULE_BASED", "RULE"):
+        return RuleBasedAIService()
+    elif provider == "GROQ" and settings.GROQ_API_KEY:
         return GroqAIService(settings.GROQ_API_KEY)
-    elif settings.GEMINI_API_KEY:
+    elif provider == "GEMINI" and settings.GEMINI_API_KEY and not settings.GEMINI_API_KEY.startswith("AQ."):
         return GeminiAIService(settings.GEMINI_API_KEY)
     elif settings.GROQ_API_KEY:
         return GroqAIService(settings.GROQ_API_KEY)
+    elif settings.GEMINI_API_KEY and not settings.GEMINI_API_KEY.startswith("AQ."):
+        return GeminiAIService(settings.GEMINI_API_KEY)
     
     return RuleBasedAIService()

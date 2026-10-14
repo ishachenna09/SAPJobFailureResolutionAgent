@@ -55,11 +55,9 @@ async def startup_event():
         db.query(JobEventModel).delete()
         db.commit()
 
-        from app.sap import get_sap_job_service
-        sap_service = get_sap_job_service()
-        # Always seed initial 6 Mock SAP jobs for Mock SAP environment
-        from app.sap.mock_sap import MockSAPJobService
-        mock_agent = JobResolutionAgent(db, sap_service=MockSAPJobService())
+        from app.sap import get_mock_sap_service
+        mock_sap_service = get_mock_sap_service()
+        mock_agent = JobResolutionAgent(db, sap_service=mock_sap_service)
         await mock_agent.process_job_event(JobEventPayload(event_type="SAP_JOB_FAILED", job_name="Z_CUSTOMER_LOAD", job_run_count=1001, platform="MOCK_SAP", status="FAILED"))
         await mock_agent.process_job_event(JobEventPayload(event_type="SAP_JOB_FAILED", job_name="Z_VENDOR_SYNC", job_run_count=3001, platform="MOCK_SAP", status="FAILED"))
         await mock_agent.process_job_event(JobEventPayload(event_type="SAP_JOB_FAILED", job_name="Z_FIN_POSTING", job_run_count=2001, platform="MOCK_SAP", status="FAILED"))

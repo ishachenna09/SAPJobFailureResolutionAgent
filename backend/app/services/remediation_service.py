@@ -144,6 +144,31 @@ class RemediationService:
             rem_record.failure_category = analysis.failure_category
             rem_record.ai_confidence = analysis.confidence
             rem_record.ai_recommendation = analysis.recommended_action
+
+            existing_fa = self.db.query(FailureAnalysisModel).filter_by(job_run_id=run_model.id).first()
+            if existing_fa:
+                existing_fa.platform = platform_val
+                existing_fa.failure_category = analysis.failure_category
+                existing_fa.confidence = analysis.confidence
+                existing_fa.root_cause_summary = analysis.root_cause_summary
+                existing_fa.evidence_json = json.dumps(analysis.evidence)
+                existing_fa.recommended_action = analysis.recommended_action
+                existing_fa.restart_mode = analysis.restart_mode
+                existing_fa.restart_strategy = analysis.restart_strategy
+                existing_fa.reason = analysis.reason
+            else:
+                self.db.add(FailureAnalysisModel(
+                    job_run_id=run_model.id,
+                    platform=platform_val,
+                    failure_category=analysis.failure_category,
+                    confidence=analysis.confidence,
+                    root_cause_summary=analysis.root_cause_summary,
+                    evidence_json=json.dumps(analysis.evidence),
+                    recommended_action=analysis.recommended_action,
+                    restart_mode=analysis.restart_mode,
+                    restart_strategy=analysis.restart_strategy,
+                    reason=analysis.reason
+                ))
             self.db.commit()
 
             await log_step(
@@ -233,6 +258,9 @@ class RemediationService:
                     new_run_model.retry_count = run_model.retry_count + 1
                     new_run_model.parent_run_id = run_model.id
                     new_run_model.remediation_execution_id = execution_id
+                    self.db.query(JobStepModel).filter_by(job_run_id=new_run_model.id).delete()
+                    self.db.query(JobLogModel).filter_by(job_run_id=new_run_model.id).delete()
+                    self.db.query(JobParameterModel).filter_by(job_run_id=new_run_model.id).delete()
                 else:
                     new_run_model = JobRunModel(
                         job_name=job_name,

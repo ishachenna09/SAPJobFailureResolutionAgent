@@ -7,7 +7,7 @@ import random
 from app.db.database import get_db
 from app.schemas.job import JobEventPayload
 from app.agents.job_resolution_agent import JobResolutionAgent
-from app.sap.mock_sap import MockSAPJobService
+from app.sap import get_mock_sap_service
 from app.db.models import JobRunModel
 
 router = APIRouter(prefix="/api/mock-sap", tags=["Mock SAP Operations"])
@@ -25,7 +25,7 @@ async def generate_mock_sap_failure(req: TriggerScenarioRequest, db: Session = D
     Emits a mock SAP Job event into Mock SAP and ingests it via Agent investigation.
     Job is stored with FAILED status and ready for autonomous remediation via [Run Agent].
     """
-    mock_sap = MockSAPJobService()
+    mock_sap = get_mock_sap_service()
 
     # Determine unique run count if not supplied
     if req.scenario == "TRANSIENT_DB_LOCK":
